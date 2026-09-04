@@ -1,6 +1,6 @@
 [package]
 name = "sparkapp"
-version = "0.1.0"
+version = "0.2.0"
 description = "desktop chat client for a spark box"
 authors = ["Forgewright AI"]
 edition = "2021"
