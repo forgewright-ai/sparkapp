@@ -1,0 +1,31 @@
+#!/bin/sh
+# sparkchat pre-commit gate: no private addresses, no secrets, sane code.
+set -e
+
+added=$(git diff --cached --unified=0 | grep '^+' | grep -v '^+++' || true)
+
+# private IPv4 ranges (10.*, 192.168.*, 172.16-31.*) must never be committed
+if printf '%s\n' "$added" | grep -nE '\b(10|192\.168|172\.(1[6-9]|2[0-9]|3[01]))\.[0-9]+\.[0-9]+\b' >/dev/null; then
+  echo "! private ip in staged diff -- use a placeholder like 192.0.2.x" >&2
+  exit 1
+fi
+
+# e-mail addresses (except the documented placeholder)
+if printf '%s\n' "$added" | grep -viE 'you@example\.com|noreply@anthropic\.com' | grep -nE '\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b' >/dev/null; then
+  echo "! e-mail address in staged diff" >&2
+  exit 1
+fi
+
+# absolute home paths naming a user
+if printf '%s\n' "$added" | grep -nE '/(home|Users)/[a-z][a-z0-9_-]+' >/dev/null; then
+  echo "! absolute home path in staged diff" >&2
+  exit 1
+fi
+
+# obvious token material
+if printf '%s\n' "$added" | grep -nE '(Bearer [A-Za-z0-9_-]{16,}|SPARK_TOKEN=[^ "]{8,})' >/dev/null; then
+  echo "! token-looking string in staged diff" >&2
+  exit 1
+fi
+
+exit 0
