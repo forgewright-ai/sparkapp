@@ -1,14 +1,17 @@
-// chat -- the two streamed chat shapes (FORGE /api/chat SSE, raw
-// /v1/chat/completions OpenAI SSE), the stop token, and the thread
-// reads. Core functions take explicit url + token so the live example
-// and tests can drive them without keyring or settings.
+// chat -- the raw-server chat shape (/v1/chat/completions, OpenAI SSE)
+// and the byte-level SSE parser the proxy shares. The FORGE's own chat
+// stream now flows raw through proxy::forge_sse; this module keeps the
+// typed path a raw llama-server needs. Core functions take explicit
+// url + token so the live example and tests can drive them without
+// keyring or settings.
 
-use crate::http::{self, ApiError, CHAT_TIMEOUT, GENERAL_TIMEOUT};
+use crate::http::{self, ApiError};
 use crate::{store, AppState};
 use futures_util::StreamExt;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tauri::Manager;
 use tokio_util::sync::CancellationToken;
 
 // ---------------------------------------------------------------- events
@@ -26,7 +29,7 @@ pub struct Timings {
     pub cache_n: Option<u64>,
 }
 
-/// The channel event, exactly as src/api.ts types it:
+/// The channel event the page's raw mode reads:
 /// {type:"queued"} | {type:"delta",t} | {type:"done",thread?,ms?,model?,timings?}
 /// | {type:"error",kind,hint}
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -107,36 +110,6 @@ fn parse_block(block: &[u8]) -> Option<(String, String)> {
     Some((event, data.join("\n")))
 }
 
-/// One FORGE SSE block into the channel event, or None for noise.
-pub fn forge_event(event: &str, data: &str) -> Option<ChatEvent> {
-    match event {
-        "queued" => Some(ChatEvent::Queued),
-        "delta" => {
-            let v: Value = serde_json::from_str(data).ok()?;
-            Some(ChatEvent::Delta { t: v.get("t")?.as_str()?.to_string() })
-        }
-        "done" => {
-            let v: Value = serde_json::from_str(data).unwrap_or(Value::Null);
-            Some(ChatEvent::Done {
-                thread: v.get("thread").and_then(|t| t.as_str()).map(String::from),
-                ms: v.get("ms").and_then(|m| m.as_f64()).map(|m| m as u64),
-                model: v.get("model").and_then(|m| m.as_str()).map(String::from),
-                timings: None,
-            })
-        }
-        "error" => {
-            let v: Value = serde_json::from_str(data).unwrap_or(Value::Null);
-            let kind = v.get("kind").and_then(|k| k.as_str()).unwrap_or("bad");
-            let hint = v.get("hint").and_then(|h| h.as_str()).unwrap_or("the server sent a broken error");
-            Some(ChatEvent::Error {
-                kind: http::normalize_kind(kind).to_string(),
-                hint: hint.to_string(),
-            })
-        }
-        _ => None,
-    }
-}
-
 /// llama-server's per-request throughput, mapped as spark records it.
 pub fn timings_of(chunk: &Value) -> Option<Timings> {
     let t = chunk.get("timings")?.as_object()?;
@@ -156,7 +129,10 @@ pub fn timings_of(chunk: &Value) -> Option<Timings> {
     Some(out)
 }
 
-// ------------------------------------------------------------ chat cores
+// ------------------------------------------------------------- chat core
+/// Open the SSE POST. No total timeout -- a generation streams for as
+/// long as the model keeps talking, exactly like the browser page (the
+/// client's 5 s connect timeout still applies; stop_stream cancels).
 async fn open_stream(
     client: &reqwest::Client,
     url: &str,
@@ -165,62 +141,13 @@ async fn open_stream(
     x_spark: bool,
 ) -> Result<reqwest::Response, ApiError> {
     let host = http::host_of(url);
-    let resp = http::request(client, Method::POST, url, token, Some(body), x_spark, CHAT_TIMEOUT).await?;
+    let resp = http::request(client, Method::POST, url, token, Some(body), x_spark, None).await?;
     let status = resp.status().as_u16();
     if !(200..300).contains(&status) {
         let bytes = resp.bytes().await.unwrap_or_default();
         return Err(http::from_status(status, &bytes, &host));
     }
     Ok(resp)
-}
-
-/// One FORGE turn: POST /api/chat, forward its SSE as channel events.
-/// An HTTP error before the stream is Err; mid-stream trouble becomes a
-/// channel error event and Ok. A cancel just stops reading.
-pub async fn chat_forge_core(
-    client: &reqwest::Client,
-    url: &str,
-    token: Option<&str>,
-    text: &str,
-    thread: Option<&str>,
-    cancel: CancellationToken,
-    emit: &mut (dyn FnMut(ChatEvent) + Send),
-) -> Result<(), ApiError> {
-    let mut body = json!({"text": text, "mode": "chat"});
-    if let Some(t) = thread {
-        body["thread"] = json!(t);
-    }
-    let endpoint = format!("{url}/api/chat");
-    let resp = open_stream(client, &endpoint, token, &body, true).await?;
-    let host = http::host_of(url);
-    let mut parser = SseParser::new();
-    let mut stream = resp.bytes_stream();
-    loop {
-        tokio::select! {
-            _ = cancel.cancelled() => return Ok(()),
-            chunk = stream.next() => match chunk {
-                None => break,
-                Some(Ok(bytes)) => {
-                    for (event, data) in parser.push(&bytes) {
-                        if let Some(e) = forge_event(&event, &data) {
-                            emit(e);
-                        }
-                    }
-                }
-                Some(Err(e)) => {
-                    let err = http::from_transport(&e, &host, CHAT_TIMEOUT);
-                    emit(ChatEvent::Error { kind: err.kind, hint: err.hint });
-                    return Ok(());
-                }
-            }
-        }
-    }
-    if let Some((event, data)) = parser.finish() {
-        if let Some(e) = forge_event(&event, &data) {
-            emit(e);
-        }
-    }
-    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -284,7 +211,7 @@ pub async fn chat_openai_core(
                     }
                 }
                 Some(Err(e)) => {
-                    let err = http::from_transport(&e, &host, CHAT_TIMEOUT);
+                    let err = http::from_transport(&e, &host, http::CONNECT_TIMEOUT);
                     emit(ChatEvent::Error { kind: err.kind, hint: err.hint });
                     return Ok(());
                 }
@@ -295,163 +222,33 @@ pub async fn chat_openai_core(
     Ok(())
 }
 
-// -------------------------------------------------------------- commands
-/// One active turn at a time: a new one cancels the old token first.
-fn new_turn(state: &AppState) -> CancellationToken {
-    let mut active = state.active.lock().unwrap();
-    if let Some(old) = active.take() {
-        old.cancel();
-    }
-    let token = CancellationToken::new();
-    *active = Some(token.clone());
-    token
-}
-
-#[tauri::command]
-pub async fn chat_forge(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
-    text: String,
-    thread: Option<String>,
-    channel: tauri::ipc::Channel<ChatEvent>,
-) -> Result<(), ApiError> {
-    let url = store::server_url(&app)?;
-    let token = store::read_token(&app)?;
-    let cancel = new_turn(&state);
-    let mut emit = |e: ChatEvent| {
-        let _ = channel.send(e);
-    };
-    chat_forge_core(&state.client, &url, token.as_deref(), &text, thread.as_deref(), cancel, &mut emit).await
-}
-
+// -------------------------------------------------------------- command
+/// One raw-mode turn. Returns the stream id right away (stop_stream(id)
+/// cancels); events arrive on the channel, open errors included.
 #[tauri::command]
 pub async fn chat_openai(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     messages: Vec<ChatMessage>,
     channel: tauri::ipc::Channel<ChatEvent>,
-) -> Result<(), ApiError> {
+) -> Result<u64, ApiError> {
     let url = store::server_url(&app)?;
     let token = store::read_token(&app)?;
-    let cancel = new_turn(&state);
-    let mut emit = |e: ChatEvent| {
-        let _ = channel.send(e);
-    };
-    chat_openai_core(&state.client, &url, token.as_deref(), &messages, cancel, &mut emit).await
-}
-
-#[tauri::command]
-pub async fn stop_chat(state: tauri::State<'_, AppState>) -> Result<(), ApiError> {
-    if let Some(token) = state.active.lock().unwrap().take() {
-        token.cancel();
-    }
-    Ok(())
-}
-
-// --------------------------------------------------------------- threads
-/// The FORGE writes thread timestamps as "YYYY-MM-DD HH:MM:SS" strings;
-/// the contract types ts as a number, so they land as epoch seconds
-/// (naive -- the box's local time read as UTC; fine for ordering and
-/// day labels). A numeric ts passes through as-is.
-fn epoch_of(v: &Value) -> f64 {
-    if let Some(n) = v.as_f64() {
-        return n;
-    }
-    let s = match v.as_str() {
-        Some(s) => s,
-        None => return 0.0,
-    };
-    let mut it = s.split(&[' ', '-', ':'][..]).filter_map(|p| p.parse::<i64>().ok());
-    let (y, mo, d) = match (it.next(), it.next(), it.next()) {
-        (Some(y), Some(mo), Some(d)) => (y, mo, d),
-        _ => return 0.0,
-    };
-    let (h, mi, sec) = (it.next().unwrap_or(0), it.next().unwrap_or(0), it.next().unwrap_or(0));
-    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) {
-        return 0.0;
-    }
-    // days-from-civil (Howard Hinnant), no chrono needed
-    let yy = if mo <= 2 { y - 1 } else { y };
-    let era = if yy >= 0 { yy } else { yy - 399 } / 400;
-    let yoe = yy - era * 400;
-    let doy = (153 * (if mo > 2 { mo - 3 } else { mo + 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146097 + doe - 719468;
-    (days * 86400 + h * 3600 + mi * 60 + sec) as f64
-}
-
-fn de_epoch<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
-    let v = Value::deserialize(d)?;
-    Ok(epoch_of(&v))
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ThreadMeta {
-    pub id: String,
-    #[serde(default, deserialize_with = "de_epoch")]
-    pub ts: f64,
-    #[serde(default)]
-    pub title: String,
-    #[serde(default)]
-    pub turns: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ThreadMessage {
-    #[serde(default, deserialize_with = "de_epoch")]
-    pub ts: f64,
-    pub role: String,
-    pub text: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub partial: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Thread {
-    pub id: String,
-    pub messages: Vec<ThreadMessage>,
-}
-
-/// GET /api/threads?n= unwrapped, explicit url + token (live example).
-pub async fn list_threads_core(
-    client: &reqwest::Client,
-    url: &str,
-    token: Option<&str>,
-    n: u32,
-) -> Result<Vec<ThreadMeta>, ApiError> {
-    let resp = http::request(client, Method::GET, &format!("{url}/api/threads?n={n}"), token, None, false, GENERAL_TIMEOUT).await?;
-    let v = http::ok_json(resp).await?;
-    let threads = v.get("threads").cloned().unwrap_or_else(|| json!([]));
-    serde_json::from_value(threads)
-        .map_err(|_| ApiError::bad("the server's thread list did not parse"))
-}
-
-#[tauri::command]
-pub async fn list_threads(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
-    n: u32,
-) -> Result<Vec<ThreadMeta>, ApiError> {
-    let url = store::server_url(&app)?;
-    let token = store::read_token(&app)?;
-    list_threads_core(&state.client, &url, token.as_deref(), n).await
-}
-
-#[tauri::command]
-pub async fn get_thread(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
-    id: String,
-) -> Result<Thread, ApiError> {
-    let url = store::server_url(&app)?;
-    let token = store::read_token(&app)?;
-    let endpoint = format!("{url}/api/threads/{}", http::encode_segment(&id));
-    let resp = http::request(&state.client, Method::GET, &endpoint, token.as_deref(), None, false, GENERAL_TIMEOUT).await?;
-    let v = http::ok_json(resp).await?;
-    let messages: Vec<ThreadMessage> = serde_json::from_value(v.get("messages").cloned().unwrap_or_else(|| json!([])))
-        .map_err(|_| ApiError::bad("the server's thread did not parse"))?;
-    let id = v.get("id").and_then(|i| i.as_str()).unwrap_or(&id).to_string();
-    Ok(Thread { id, messages })
+    let (id, cancel) = state.register_stream();
+    let client = state.client.clone();
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut emit = |e: ChatEvent| {
+            let _ = channel.send(e);
+        };
+        if let Err(e) =
+            chat_openai_core(&client, &url, token.as_deref(), &messages, cancel, &mut emit).await
+        {
+            emit(ChatEvent::Error { kind: e.kind, hint: e.hint });
+        }
+        app2.state::<AppState>().drop_stream(id);
+    });
+    Ok(id)
 }
 
 #[cfg(test)]
@@ -513,23 +310,21 @@ mod tests {
     }
 
     #[test]
-    fn forge_events_serialize_like_api_ts() {
-        let q = serde_json::to_value(forge_event("queued", "{}").unwrap()).unwrap();
+    fn chat_events_serialize_like_the_page_reads() {
+        let q = serde_json::to_value(ChatEvent::Queued).unwrap();
         assert_eq!(q, serde_json::json!({"type": "queued"}));
-        let d = serde_json::to_value(forge_event("delta", r#"{"t":"hi"}"#).unwrap()).unwrap();
+        let d = serde_json::to_value(ChatEvent::Delta { t: "hi".into() }).unwrap();
         assert_eq!(d, serde_json::json!({"type": "delta", "t": "hi"}));
-        let done = serde_json::to_value(
-            forge_event("done", r#"{"thread":"t-1","ms":9,"model":"m"}"#).unwrap(),
-        ).unwrap();
+        let done = serde_json::to_value(ChatEvent::Done {
+            thread: Some("t-1".into()),
+            ms: Some(9),
+            model: Some("m".into()),
+            timings: None,
+        })
+        .unwrap();
         assert_eq!(done, serde_json::json!({"type": "done", "thread": "t-1", "ms": 9, "model": "m"}));
-        let e = serde_json::to_value(forge_event("error", r#"{"kind":"loading","hint":"wait"}"#).unwrap()).unwrap();
+        let e = serde_json::to_value(ChatEvent::Error { kind: "loading".into(), hint: "wait".into() }).unwrap();
         assert_eq!(e, serde_json::json!({"type": "error", "kind": "loading", "hint": "wait"}));
-    }
-
-    #[test]
-    fn unknown_error_kind_folds_to_bad() {
-        let e = forge_event("error", r#"{"kind":"ref","hint":"no such file"}"#).unwrap();
-        assert_eq!(e, ChatEvent::Error { kind: "bad".into(), hint: "no such file".into() });
     }
 
     #[test]
@@ -544,25 +339,5 @@ mod tests {
             tg_tps: Some(33.3), cache_n: Some(40),
         });
         assert!(timings_of(&serde_json::json!({"choices": []})).is_none());
-    }
-
-    #[test]
-    fn epoch_of_reads_both_shapes() {
-        assert_eq!(epoch_of(&serde_json::json!(1725000000)), 1725000000.0);
-        // 1970-01-01 00:00:00 is 0; 2026-09-03 10:00:00 is a sane epoch
-        assert_eq!(epoch_of(&serde_json::json!("1970-01-01 00:00:00")), 0.0);
-        let e = epoch_of(&serde_json::json!("2026-09-03 10:00:00"));
-        assert_eq!(e, 1788429600.0);
-        assert_eq!(epoch_of(&serde_json::json!("")), 0.0);
-    }
-
-    #[test]
-    fn thread_meta_parses_string_ts() {
-        let rows: Vec<ThreadMeta> = serde_json::from_value(serde_json::json!([
-            {"id": "2026-09-03-101530", "ts": "2026-09-03 10:15:30", "title": "hello", "turns": 2},
-            {"id": "x", "ts": "", "title": "t", "turns": 1}
-        ])).unwrap();
-        assert!(rows[0].ts > 1.7e9);
-        assert_eq!(rows[1].ts, 0.0);
     }
 }

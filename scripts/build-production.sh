@@ -42,10 +42,10 @@ build_macos() {
   bundle="src-tauri/target/release/bundle"
   stage="$bundle/dmg-stage"
   rm -rf "$stage" && mkdir -p "$stage" "$bundle/dmg"
-  cp -R "$bundle/macos/sparkchat.app" "$stage/"
+  cp -R "$bundle/macos/spark.app" "$stage/"
   ln -s /Applications "$stage/Applications"
-  hdiutil create -volname sparkchat -srcfolder "$stage" -ov -format UDZO \
-    "$bundle/dmg/sparkchat_${ver}_aarch64.dmg"
+  hdiutil create -volname spark -srcfolder "$stage" -ov -format UDZO \
+    "$bundle/dmg/spark_${ver}_aarch64.dmg"
   rm -rf "$stage"
   ls -lh "$bundle"/dmg/*.dmg
 }

@@ -1,0 +1,260 @@
+<!doctype html>
+<!-- spark FORGE page: the one static document. Every view is a section here;
+     spark.js shows one at a time by hash route and fills it from /api/*.
+     No inline script, no inline style, no inline handler (CSP: default-src
+     'self'). ASCII only: this file is read on the Linux console too. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#100e0c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="spark">
+<title>spark</title>
+<link rel="stylesheet" href="/static/spark.css">
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
+</head>
+<body>
+<a class="skip" href="#main">skip to content</a>
+
+<header class="top">
+  <a class="mark" href="#/monitor">spark</a>
+  <span id="site" class="site"></span>
+  <span id="role" class="role mono" hidden></span>
+  <span id="bar" class="bar mono" title="the tmux status line, live"></span>
+  <label class="pal">palette
+    <select id="palette" aria-label="palette (this browser only)"></select>
+  </label>
+  <button id="logout" type="button" class="quiet" hidden>logout</button>
+</header>
+
+<nav class="tabs" aria-label="pages">
+  <a href="#/monitor" data-view="monitor"><kbd>1</kbd> monitor</a>
+  <a href="#/chat" data-view="chat"><kbd>2</kbd> chat</a>
+  <a href="#/do" data-view="do"><kbd>3</kbd> do</a>
+  <a href="#/config" data-view="config"><kbd>4</kbd> config</a>
+  <a href="#/help" data-view="help"><kbd>5</kbd> help</a>
+</nav>
+
+<main id="main">
+
+<section id="login" class="card login" hidden>
+  <img class="s-mark" src="/static/favicon.svg" alt="" width="54" height="54">
+  <h2>forge token</h2>
+  <p class="muted web">A token from the box: <code>forge-token</code> (admin) or
+    <code>ember-token</code> (user) under <code>~/.local/state/spark/</code>
+    (<code>spark forge --print-url [--user]</code> shows it).</p>
+  <p class="muted tauri">The FORGE's address and a token from the box
+    (<code>spark forge --print-url</code> shows both).</p>
+  <form id="login-form">
+    <label for="server-url" class="tauri">server url</label>
+    <input id="server-url" class="tauri" type="text" placeholder="http://box:8081"
+      autocomplete="off" spellcheck="false" inputmode="url">
+    <label for="token">token</label>
+    <input id="token" type="password" autocomplete="off" spellcheck="false" required>
+    <button type="submit" class="primary">log in</button>
+  </form>
+  <p id="login-error" class="err" role="alert"></p>
+</section>
+
+<section id="view-monitor" class="view" hidden>
+  <div class="card">
+    <div class="head">
+      <h2>check</h2>
+      <span id="check-tally" class="mono"></span>
+      <span id="check-age" class="muted"></span>
+      <button id="check-refresh" type="button" class="quiet adm">refresh</button>
+    </div>
+    <div id="check-table" class="check"></div>
+  </div>
+  <div class="card">
+    <div class="head">
+      <h2>stats</h2>
+      <select id="stats-days" aria-label="window">
+        <option value="1">today</option>
+        <option value="7">week</option>
+        <option value="3650">all</option>
+      </select>
+    </div>
+    <div id="stats-tiles" class="tiles"></div>
+  </div>
+  <div class="two adm">
+    <div class="card">
+      <h2>serve</h2>
+      <dl id="serve-facts" class="facts"></dl>
+      <pre id="serve-log" class="log" tabindex="0" aria-label="server log tail"></pre>
+    </div>
+    <div class="card" id="gpu-card" hidden>
+      <h2>gpu</h2>
+      <dl id="gpu-facts" class="facts"></dl>
+    </div>
+  </div>
+  <div class="card adm">
+    <h2>bench</h2>
+    <dl id="bench-facts" class="facts"></dl>
+    <div id="tune-table"></div>
+  </div>
+</section>
+
+<section id="view-chat" class="view chat" hidden>
+  <button id="threads-toggle" type="button" class="quiet drawer-btn" aria-expanded="false">threads</button>
+  <aside id="threads" class="threads">
+    <div class="head">
+      <h2>threads</h2>
+      <button id="thread-new" type="button" class="quiet">new</button>
+    </div>
+    <ul id="thread-list" class="list"></ul>
+  </aside>
+  <div class="talk">
+    <div id="transcript" class="transcript mono" tabindex="0" aria-live="polite" aria-label="transcript"></div>
+    <form id="chat-form" class="ask">
+      <textarea id="chat-text" rows="1" data-main placeholder="ask (Enter sends, Shift+Enter newline)" aria-label="message"></textarea>
+      <button id="chat-stop" type="button" class="danger stop" hidden>stop</button>
+      <button id="chat-send" type="submit" class="primary">send</button>
+    </form>
+    <p id="chat-status" class="muted small" aria-live="polite"></p>
+  </div>
+</section>
+
+<section id="view-do" class="view" hidden>
+  <div class="card">
+    <h2>do</h2>
+    <p class="muted">A task, one command at a time. Nothing runs without a click.</p>
+    <form id="do-form" class="ask">
+      <input id="do-goal" type="text" data-main placeholder="goal" aria-label="goal" autocomplete="off">
+      <button type="submit">propose</button>
+    </form>
+    <p id="do-status" class="muted small"></p>
+  </div>
+  <div id="do-steps" class="steps"></div>
+</section>
+
+<section id="view-config" class="view" hidden>
+  <div class="two adm">
+    <div class="card">
+      <h2>theme</h2>
+      <form id="theme-form" class="row">
+        <select id="theme-pick" data-main aria-label="theme"></select>
+        <button type="submit" class="primary">apply</button>
+      </form>
+    </div>
+    <div class="card">
+      <h2>font</h2>
+      <form id="font-form" class="row">
+        <input id="font-face" type="text" placeholder="face" aria-label="face" autocomplete="off">
+        <input id="font-size" type="text" placeholder="size" aria-label="size" autocomplete="off" class="short">
+        <button type="submit" class="primary">apply</button>
+      </form>
+    </div>
+  </div>
+  <div class="card adm">
+    <div class="head">
+      <h2>model</h2>
+      <button type="button" class="quiet" data-run="model" data-args="auto">auto</button>
+      <button type="button" class="quiet" data-run="model" data-args="none">none</button>
+      <label class="pal">ember
+        <select id="ember-pick" aria-label="ember model"></select>
+      </label>
+    </div>
+    <div id="model-table"></div>
+  </div>
+  <div class="card adm">
+    <h2>machine</h2>
+    <div class="actions">
+      <span class="lbl">prompt</span>
+      <button type="button" data-run="on">on</button>
+      <button type="button" data-run="off">off</button>
+      <span class="lbl">server</span>
+      <button type="button" data-run="serve">serve</button>
+      <button type="button" data-run="stop">stop</button>
+      <span class="lbl">boot</span>
+      <button type="button" data-run="bootconfig" data-args="quiet">quiet</button>
+      <button type="button" data-run="bootconfig" data-args="loud">loud</button>
+      <span class="lbl">tune</span>
+      <button type="button" data-run="tune" data-args="apply">apply winner</button>
+    </div>
+    <dl id="config-facts" class="facts"></dl>
+  </div>
+  <div class="card adm" id="tokens-card">
+    <div class="head">
+      <h2>tokens</h2>
+      <span id="token-role" class="mono muted"></span>
+    </div>
+    <div class="actions">
+      <button type="button" class="danger" data-run="forge" data-args="token --new">rotate admin token</button>
+      <button type="button" class="danger" data-run="forge" data-args="token --new --user">rotate user token</button>
+    </div>
+    <p class="muted small">rotating logs that role out everywhere</p>
+  </div>
+  <div class="card usr" id="pal-card" hidden>
+    <h2>palette</h2>
+    <select id="palette2" aria-label="palette (your view only)"></select>
+    <p class="muted small">your view only -- this browser, not the box</p>
+  </div>
+  <div class="two">
+    <div class="card">
+      <div class="head">
+        <h2>soul</h2>
+        <button id="soul-save" type="button">save</button>
+      </div>
+      <textarea id="soul-text" rows="10" class="mono wide" aria-label="soul" spellcheck="false"></textarea>
+      <p id="soul-status" class="muted small"></p>
+    </div>
+    <div class="card">
+      <h2>memory</h2>
+      <ul id="memory-list" class="list"></ul>
+      <form id="memory-form" class="row">
+        <input id="memory-text" type="text" placeholder="remember ..." aria-label="a fact to remember" autocomplete="off">
+        <button type="submit">remember</button>
+      </form>
+    </div>
+  </div>
+  <div class="card adm">
+    <div class="head">
+      <h2 id="output-title">output</h2>
+      <button id="output-clear" type="button" class="quiet">clear</button>
+    </div>
+    <pre id="output" class="log" tabindex="0" aria-live="polite" aria-label="command output"></pre>
+  </div>
+</section>
+
+<section id="view-help" class="view" hidden>
+  <div class="card">
+    <h2>keys</h2>
+    <table class="keys">
+      <tr><td><kbd>1</kbd> .. <kbd>5</kbd></td><td>monitor, chat, do, config, help</td></tr>
+      <tr><td><kbd>/</kbd></td><td>focus the page's main input</td></tr>
+      <tr><td><kbd>n</kbd></td><td>new thread (chat)</td></tr>
+      <tr><td><kbd>j</kbd> / <kbd>k</kbd></td><td>next / previous thread (chat)</td></tr>
+      <tr><td><kbd>r</kbd></td><td>refresh the current page</td></tr>
+      <tr><td><kbd>?</kbd></td><td>this page</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>stop the answer or the running command, else leave the input, else close the drawer</td></tr>
+      <tr><td><kbd>Enter</kbd></td><td>send (chat); <kbd>Shift</kbd>+<kbd>Enter</kbd> newline</td></tr>
+      <tr class="tauri"><td><kbd>q</kbd></td><td>quit the app</td></tr>
+      <tr><td><kbd>Tab</kbd></td><td>every control, in order</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h2>what this is</h2>
+    <p>What this page can do is what your shell can do: every button is a
+      <code>spark</code> verb run on the box, and every card is what
+      <code>spark check</code>, <code>spark stats</code>, <code>spark serve</code>
+      and <code>spark bench</code> print. The page never runs a command you did
+      not click.</p>
+    <p>The palette menu in the header changes this browser only; the theme
+      picker under config runs <code>spark theme</code> on the box.</p>
+    <p>The FORGE knows two roles. The user token talks to the ember and
+      shapes who it is; the admin token is the whole box.</p>
+    <p>API health: <code id="help-health"></code> (no token needed; everything
+      else under <code>/api/</code> takes your token as a cookie or bearer).</p>
+  </div>
+</section>
+
+</main>
+<script src="/static/spark.js" defer></script>
+</body>
+</html>

@@ -1,31 +1,29 @@
 # sparkchat
 
-A light desktop chat client for a [spark](https://github.com/forgewright-ai/spark)
-box. The terminal has `spark chat`; the desktop has sparkchat.
+<img src="https://raw.githubusercontent.com/forgewright-ai/spark/main/assets/banner.svg" width="400" alt="spark">
 
-Point it at your box once -- server url plus the token -- and chat.
-It speaks to a FORGE (`spark forge`) for server-side threads, or to a
-raw llama-server (`spark serve`) over the OpenAI shape. It probes and
-picks by itself.
+The desktop door to a [spark](https://github.com/forgewright-ai/spark)
+box. The prompt has `spark chat`, the LAN has the page -- this wraps
+that same page as a desktop app named **spark**, for macOS and Windows.
 
-## What it does
-
-- streaming answers, stop with Esc (the partial stays, marked `* (stopped)`)
-- threads: list, resume, start new (FORGE)
-- the token lives in the OS keychain, never in a file, never in the page
-- slash verbs in the input: `/help /new /last /model /q`
-- tok/s readout after each answer
-- light and dark, follows the system
+Point it at your box once -- server url plus the token -- and everything
+the page does works on the desktop: chat with streamed answers, threads,
+checks, the monitor. The token lives in the OS keychain, never in a
+file, never in the page.
 
 ## How it is built
 
-Tauri 2. The window is vanilla TypeScript -- no framework, no runtime
-dependencies. Every HTTP byte flows through the Rust core (reqwest):
-the webview never fetches and never sees the token.
+Tauri 2 around spark's own page. `page/` is the page exactly as the
+spark repo ships it, vendored at the ref pinned in
+`scripts/spark-page.ref` -- no framework, no bundler, no build step.
+Every HTTP byte flows through the Rust core (reqwest): the webview never
+fetches and never sees the token. When the box is away, cached reads
+answer with an `offline -- showing <age>` note.
 
 ```
 npm install
 npm run tauri dev            # develop
+scripts/sync-page.sh         # refresh page/ at the pinned ref
 scripts/build-production.sh  # macos bundle; 'all' adds windows
 scripts/release.sh 0.1.0 "summary"
 ```

@@ -146,7 +146,7 @@ pub async fn probe_url(
     let host = http::host_of(url);
 
     // A FORGE answers /api/health without a token, "forge": true.
-    let forge = http::request(client, Method::GET, &format!("{url}/api/health"), None, None, false, GENERAL_TIMEOUT).await;
+    let forge = http::request(client, Method::GET, &format!("{url}/api/health"), None, None, false, Some(GENERAL_TIMEOUT)).await;
     if let Ok(resp) = forge {
         if resp.status().is_success() {
             if let Ok(v) = resp.json::<Value>().await {
@@ -169,7 +169,7 @@ pub async fn probe_url(
     }
 
     // A raw llama-server: /health 200 (ok) or 503 (alive, loading).
-    let resp = http::request(client, Method::GET, &format!("{url}/health"), None, None, false, GENERAL_TIMEOUT).await?;
+    let resp = http::request(client, Method::GET, &format!("{url}/health"), None, None, false, Some(GENERAL_TIMEOUT)).await?;
     let status = resp.status().as_u16();
     if status != 200 && status != 503 {
         return Err(ApiError::new("down", format!("no spark server at {host} -- is the box up?")));
@@ -184,7 +184,7 @@ pub async fn probe_url(
 
     // Its models, with the bearer. 401 is a real answer; anything else
     // that fails just leaves the list empty (as wire.models does).
-    let models = http::request(client, Method::GET, &format!("{url}/v1/models"), token, None, false, GENERAL_TIMEOUT).await;
+    let models = http::request(client, Method::GET, &format!("{url}/v1/models"), token, None, false, Some(GENERAL_TIMEOUT)).await;
     if let Ok(resp) = models {
         if resp.status().as_u16() == 401 {
             return Err(http::from_status(401, b"", &host));
@@ -245,7 +245,7 @@ pub async fn check_token(
     let host = http::host_of(&url);
     let info = resolve(&app, &state, false).await?;
     let path = if info.kind == "forge" { "/api/me" } else { "/v1/models" }; // /health is tokenless on a raw server
-    let resp = http::request(&state.client, Method::GET, &format!("{url}{path}"), token.as_deref(), None, false, GENERAL_TIMEOUT).await?;
+    let resp = http::request(&state.client, Method::GET, &format!("{url}{path}"), token.as_deref(), None, false, Some(GENERAL_TIMEOUT)).await?;
     match resp.status().as_u16() {
         200 => {
             if info.kind == "forge" {

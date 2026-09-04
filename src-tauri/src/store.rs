@@ -41,7 +41,7 @@ pub fn server_url(app: &tauri::AppHandle) -> Result<String, ApiError> {
 
 fn entry_for(url: &str) -> Result<keyring::Entry, ApiError> {
     let host = crate::http::host_of(url);
-    keyring::Entry::new("sparkchat", &host)
+    keyring::Entry::new("spark", &host)
         .map_err(|e| ApiError::bad(format!("keychain error -- {}", lc(e))))
 }
 
@@ -93,6 +93,12 @@ pub async fn set_token(app: tauri::AppHandle, token: String) -> Result<(), ApiEr
 #[tauri::command]
 pub async fn clear_token(app: tauri::AppHandle) -> Result<(), ApiError> {
     let url = server_url(&app)?;
+    // Logout means the machine holds nothing: the offline cache of this
+    // server's threads goes with the token (best effort -- a locked file
+    // never blocks the logout itself).
+    if let Ok(data) = app.path().app_data_dir() {
+        let _ = std::fs::remove_dir_all(crate::cache::dir_for(&data.join("cache"), &url));
+    }
     match entry_for(&url)?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(ApiError::bad(format!("keychain error -- {}", lc(e)))),

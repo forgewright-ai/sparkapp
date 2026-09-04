@@ -1,0 +1,12 @@
+{
+  "name": "spark",
+  "short_name": "spark",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#100e0c",
+  "theme_color": "#100e0c",
+  "icons": [
+    { "src": "/static/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any" }
+  ]
+}

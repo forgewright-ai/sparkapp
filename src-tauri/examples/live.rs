@@ -6,7 +6,7 @@
 //   SPARKCHAT_TEST_TOKEN=$(cat ~/.local/state/spark/ember-token) \
 //   cargo run --example live
 
-use sparkchat_lib::{brain, chat, shared_client};
+use sparkchat_lib::{brain, chat, proxy, shared_client};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
@@ -42,58 +42,52 @@ async fn main() {
         std::process::exit(1);
     }
 
-    // 2. threads
-    match chat::list_threads_core(&client, &url, token.as_deref(), 5).await {
-        Ok(threads) => {
-            println!("threads: {}", threads.len());
-            for t in &threads {
-                println!("  {} turns={} title={:.40}", t.id, t.turns, t.title);
-            }
+    // 2. threads through the proxy's GET path
+    match proxy::get_json(&client, &url, token.as_deref(), "/api/threads?n=5").await {
+        Ok(v) => {
+            let n = v
+                .get("threads")
+                .and_then(|t| t.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            println!("threads: {n}");
         }
         Err(e) => {
-            eprintln!("list_threads failed: {} -- {}", e.kind, e.hint);
+            eprintln!("get /api/threads failed: {} -- {}", e.kind, e.hint);
             std::process::exit(1);
         }
     }
 
-    // 3. one short chat turn
+    // 3. one short chat turn through the raw SSE relay
     let mut answer = String::new();
     let mut events: Vec<String> = vec![];
-    let mut emit = |e: chat::ChatEvent| {
-        match &e {
-            chat::ChatEvent::Queued => events.push("queued".into()),
-            chat::ChatEvent::Delta { t } => {
-                if events.last().map(|s| s.as_str()) != Some("delta") {
-                    events.push("delta".into());
+    let mut emit = |event: String, data: String| match event.as_str() {
+        "delta" => {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
+                if let Some(t) = v.get("t").and_then(|t| t.as_str()) {
+                    answer.push_str(t);
                 }
-                answer.push_str(t);
             }
-            chat::ChatEvent::Done { thread, ms, model, .. } => {
-                events.push(format!(
-                    "done(thread={} ms={} model={})",
-                    thread.as_deref().unwrap_or("-"),
-                    ms.unwrap_or(0),
-                    model.as_deref().unwrap_or("-"),
-                ));
+            if events.last().map(String::as_str) != Some("delta") {
+                events.push("delta".into());
             }
-            chat::ChatEvent::Error { kind, hint } => events.push(format!("error({kind}: {hint})")),
         }
+        other => events.push(other.to_string()),
     };
-    let cancel = CancellationToken::new();
-    if let Err(e) = chat::chat_forge_core(
+    let body = serde_json::json!({
+        "text": "in one short sentence: what is a forge?",
+        "mode": "chat",
+    });
+    proxy::sse(
         &client,
         &url,
         token.as_deref(),
-        "in one short sentence: what is a forge?",
-        None,
-        cancel,
+        "/api/chat",
+        Some(&body),
+        CancellationToken::new(),
         &mut emit,
     )
-    .await
-    {
-        eprintln!("chat_forge failed: {} -- {}", e.kind, e.hint);
-        std::process::exit(1);
-    }
+    .await;
     println!("chat events: {}", events.join(" -> "));
     let head: String = answer.chars().take(80).collect();
     println!("answer[..80]: {}", head.replace('\n', " "));

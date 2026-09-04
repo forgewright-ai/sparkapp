@@ -1,5 +1,22 @@
 # Changelog
 
+## unreleased
+
+The one-client reshape: the desktop now ships spark's own page.
+
+- the TypeScript window is gone; page/ vendors the spark repo's FORGE
+  page at the ref pinned in scripts/spark-page.ref (scripts/sync-page.sh,
+  drift checked in CI)
+- new Rust proxy commands (forge_get/post/delete, forge_sse,
+  forge_events, stop_stream, quit) with a hard /api/ + /v1/ path
+  allowlist -- the page invokes, the core speaks http
+- offline reads: allowlisted GETs are cached in the app data dir and
+  answered with _cached_at when the box is down or slow
+- app renamed spark (product name, window title,
+  identifier com.forgewright.spark, keychain service "spark")
+- csp tightened to default-src 'self'; no bundler, no npm build --
+  withGlobalTauri hands the plain page invoke + Channel
+
 ## v0.1.0
 
 The first release. A light desktop chat client for a spark box.

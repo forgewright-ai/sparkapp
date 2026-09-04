@@ -1,0 +1,53 @@
+name: page-sync
+
+# page/ is vendored from spark's lib/spark/forge at the ref pinned in
+# scripts/spark-page.ref -- this check fails when the committed copy
+# drifts from that ref.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: gate on the bootstrap state
+        id: gate
+        # The drift check self-skips in two bootstrap states, and only
+        # there (release.sh stays the hard stop -- it re-syncs and
+        # refuses to ship a page/ that does not match the pinned ref):
+        #   1. page/ still holds the hand-written placeholder;
+        #   2. the pinned ref predates the desktop-aware page (its tree
+        #      lacks lib/spark/forge/manifest.webmanifest), so page/ was
+        #      synced from the spark worktree and no tag can match it
+        #      yet. Once spark tags the page and the ref is bumped, the
+        #      check arms itself.
+        # A ref that cannot be cloned at all is NOT a skip: the sync
+        # step runs and fails loudly.
+        run: |
+          if grep -q 'placeholder -- the real page arrives' page/index.html; then
+            echo "vendored=false" >> "$GITHUB_OUTPUT"
+            echo "page/ still holds the placeholder -- drift check skipped; vendor with scripts/sync-page.sh once spark tags the page"
+            exit 0
+          fi
+          REF="$(cat scripts/spark-page.ref)"
+          TMP="$(mktemp -d)"
+          if git -c advice.detachedHead=false clone -q --depth 1 --branch "$REF" \
+               https://github.com/forgewright-ai/spark "$TMP/spark" \
+             && [ ! -f "$TMP/spark/lib/spark/forge/manifest.webmanifest" ]; then
+            echo "vendored=false" >> "$GITHUB_OUTPUT"
+            echo "spark ref $REF predates the desktop-aware page -- drift check skipped; tag spark, bump scripts/spark-page.ref, run scripts/sync-page.sh"
+          else
+            echo "vendored=true" >> "$GITHUB_OUTPUT"
+          fi
+          rm -rf "$TMP"
+      - name: sync page/ at the pinned ref
+        if: steps.gate.outputs.vendored == 'true'
+        run: scripts/sync-page.sh
+      - name: committed page/ must match the pinned ref
+        if: steps.gate.outputs.vendored == 'true'
+        run: |
+          git diff --exit-code page/
+          test -z "$(git status --porcelain page/)"

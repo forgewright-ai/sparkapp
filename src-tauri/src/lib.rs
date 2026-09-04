@@ -1,13 +1,16 @@
-// sparkchat -- the Rust core. Every HTTP byte flows through here: the
-// webview never fetches, never sees the token.
+// sparkchat -- the Rust core under spark's page. Every HTTP byte flows
+// through here: the webview never fetches, never sees the token.
 
 pub mod brain;
+pub mod cache;
 pub mod chat;
 pub mod http;
+pub mod proxy;
 pub mod store;
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 pub struct AppState {
@@ -15,8 +18,12 @@ pub struct AppState {
     pub client: reqwest::Client,
     /// The brain probe, cached 60 s (brain::CACHE_TTL), keyed on the URL.
     pub brain: Mutex<Option<brain::CachedBrain>>,
-    /// The active chat turn's stop token; one turn at a time.
-    pub active: Mutex<Option<CancellationToken>>,
+    /// Live streams by id (chat turns, /api/chat SSE); stop_stream(id)
+    /// cancels one.
+    pub streams: Mutex<HashMap<u64, CancellationToken>>,
+    next_stream: AtomicU64,
+    /// The one /api/events subscription; a new one replaces the old.
+    pub events: Mutex<Option<CancellationToken>>,
 }
 
 impl Default for AppState {
@@ -30,16 +37,32 @@ impl AppState {
         Self {
             client: shared_client(),
             brain: Mutex::new(None),
-            active: Mutex::new(None),
+            streams: Mutex::new(HashMap::new()),
+            next_stream: AtomicU64::new(0),
+            events: Mutex::new(None),
         }
+    }
+
+    /// A fresh stream id + its stop token, registered for stop_stream.
+    pub fn register_stream(&self) -> (u64, CancellationToken) {
+        let id = self.next_stream.fetch_add(1, Ordering::Relaxed) + 1;
+        let token = CancellationToken::new();
+        self.streams.lock().unwrap().insert(id, token.clone());
+        (id, token)
+    }
+
+    /// Forget a finished stream (its token dies with it).
+    pub fn drop_stream(&self, id: u64) {
+        self.streams.lock().unwrap().remove(&id);
     }
 }
 
 /// The client every request shares: quick to notice a dead box, no
-/// overall timeout here (each request sets its own 20 s / 120 s).
+/// overall timeout here (plain requests set their own 20 s cap; SSE
+/// streams set none, living as long as the server keeps talking).
 pub fn shared_client() -> reqwest::Client {
     reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(5))
+        .connect_timeout(http::CONNECT_TIMEOUT)
         .build()
         .expect("reqwest client")
 }
@@ -56,11 +79,14 @@ pub fn run() {
             store::clear_token,
             brain::probe_brain,
             brain::check_token,
-            chat::chat_forge,
             chat::chat_openai,
-            chat::stop_chat,
-            chat::list_threads,
-            chat::get_thread,
+            proxy::forge_get,
+            proxy::forge_post,
+            proxy::forge_delete,
+            proxy::forge_sse,
+            proxy::forge_events,
+            proxy::stop_stream,
+            proxy::quit,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
