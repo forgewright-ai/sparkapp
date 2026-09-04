@@ -76,7 +76,7 @@ mod tests {
 
     fn tmp(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "sparkchat-cache-{}-{name}",
+            "sparkapp-cache-{}-{name}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);

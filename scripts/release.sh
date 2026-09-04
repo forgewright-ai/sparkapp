@@ -1,5 +1,5 @@
 #!/bin/bash
-# sparkchat release -- bump the version in its four homes, build both
+# sparkapp release -- bump the version in its four homes, build both
 # targets, tag, and publish a GitHub Release with the artifacts.
 #
 # usage: scripts/release.sh <version> "<one-line summary>"
@@ -31,7 +31,7 @@ bump() {
     }
   "
   sed -i '' "s/^version = \"$CURRENT\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
-  (cd src-tauri && cargo update -p sparkchat -q)  # sync Cargo.lock
+  (cd src-tauri && cargo update -p sparkapp -q)  # sync Cargo.lock
   git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
   git commit -m "release: v$VERSION -- $SUMMARY"
 }
@@ -52,7 +52,7 @@ DMG=$(ls src-tauri/target/release/bundle/dmg/spark_${VERSION}_*.dmg)
 EXE=$(ls src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/spark_${VERSION}_*.exe)
 
 git push
-git tag -a "v$VERSION" -m "sparkchat v$VERSION"
+git tag -a "v$VERSION" -m "sparkapp v$VERSION"
 git push origin "v$VERSION"
 
 NOTES=$(awk "/^## v$VERSION/{f=1;next} /^## /{f=0} f" CHANGELOG.md)

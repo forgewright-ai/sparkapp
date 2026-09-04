@@ -1,4 +1,4 @@
-# sparkchat — the desktop shell for spark's page
+# sparkapp — the desktop shell for spark's page
 
 ## What
 A thin Tauri 2 shell that ships spark's own web page (the FORGE page,

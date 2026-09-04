@@ -1,4 +1,4 @@
-// sparkchat -- the Rust core under spark's page. Every HTTP byte flows
+// sparkapp -- the Rust core under spark's page. Every HTTP byte flows
 // through here: the webview never fetches, never sees the token.
 
 pub mod brain;

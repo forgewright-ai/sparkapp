@@ -6,7 +6,7 @@
 //   SPARKCHAT_TEST_TOKEN=$(cat ~/.local/state/spark/ember-token) \
 //   cargo run --example live
 
-use sparkchat_lib::{brain, chat, proxy, shared_client};
+use sparkapp_lib::{brain, chat, proxy, shared_client};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::main]

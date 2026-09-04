@@ -1,5 +1,5 @@
 #!/bin/sh
-# sparkchat pre-commit gate: no private addresses, no secrets, sane code.
+# sparkapp pre-commit gate: no private addresses, no secrets, sane code.
 set -e
 
 added=$(git diff --cached --unified=0 | grep '^+' | grep -v '^+++' || true)

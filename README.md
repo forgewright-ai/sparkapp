@@ -1,4 +1,4 @@
-# sparkchat
+# sparkapp
 
 <img src="https://raw.githubusercontent.com/forgewright-ai/spark/main/assets/banner.svg" width="400" alt="spark">
 

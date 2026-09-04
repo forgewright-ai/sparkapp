@@ -1,5 +1,5 @@
 #!/bin/bash
-# sparkchat production build -- macos, windows (xwin cross-compile), or all.
+# sparkapp production build -- macos, windows (xwin cross-compile), or all.
 set -e
 
 TARGET="${1:-macos}"
