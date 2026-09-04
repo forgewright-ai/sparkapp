@@ -1,8 +1,9 @@
 // The chat view: transcript, input, status line, stop, slash verbs.
 // Mirrors spark's terminal chat: the answer mark is `*`, a cancelled answer
 // keeps its partial text under `* (stopped)`, /help /new /last /model /q.
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ChatEvent } from "../api";
-import { chatForge, chatOpenai, probeBrain, stopChat } from "../api";
+import { chatForge, chatOpenai, listThreads, probeBrain, stopChat } from "../api";
 import type { Entry } from "../state";
 import {
   state,
@@ -230,11 +231,16 @@ async function send(): Promise<void> {
     }
   } finally {
     if (cur === turn && !turn.over) {
-      // the channel closed without done or error: keep what streamed
-      turn.over = true;
-      onStopped(state, entry);
-      if (liveMark) liveMark.textContent = "* (stopped)";
-      updateStatus();
+      // the channel closed without done or error -- but a late done may
+      // still be in flight (channel vs invoke ordering isn't promised),
+      // so give it a beat before keeping what streamed
+      await new Promise((r) => setTimeout(r, 80));
+      if (cur === turn && !turn.over) {
+        turn.over = true;
+        onStopped(state, entry);
+        if (liveMark) liveMark.textContent = "* (stopped)";
+        updateStatus();
+      }
     }
     ta.focus();
   }
@@ -245,8 +251,11 @@ function failRow(entry: Entry): void {
     // nothing streamed: the row is the hint
     if (liveTxt) liveTxt.textContent = entry.text;
     if (liveTxt) liveTxt.closest(".msg")?.classList.add("err-row");
+  } else if (liveMark) {
+    // a half-streamed answer keeps its text under the stopped mark;
+    // the hint lives on the status line
+    liveMark.textContent = "* (stopped)";
   }
-  // a half-streamed answer keeps its text; the hint lives on the status line
 }
 
 /* ----------------------------------------------------------- stop */
@@ -263,6 +272,16 @@ async function stop(): Promise<void> {
   onStopped(state, turn.entry);
   if (liveMark) liveMark.textContent = "* (stopped)";
   updateStatus();
+  // stopping the first turn of a new forge thread cancels the read before
+  // done names the thread -- but the server created it; adopt the newest
+  if (state.brain?.kind === "forge" && state.thread === null) {
+    try {
+      const ts = await listThreads(1);
+      if (ts[0]) state.thread = ts[0].id;
+    } catch {
+      // the drawer refresh below will try again
+    }
+  }
   deps.onTurnDone();
 }
 
@@ -270,7 +289,7 @@ async function stop(): Promise<void> {
 function slash(text: string): void {
   const verb = text.split(/\s+/)[0];
   if (QUIT_WORDS.includes(verb)) {
-    window.close();
+    void getCurrentWindow().close();
     return;
   }
   if (verb === "/help") sysLine(HELP);

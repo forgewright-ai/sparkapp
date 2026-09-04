@@ -58,14 +58,28 @@ export function busy(s: AppState): boolean {
 /** idle/done/stopped/error -> sending; returns the assistant entry to fill */
 export function beginTurn(s: AppState, text: string): Entry {
   s.transcript.push({ role: "user", text });
-  const entry: Entry = { role: "assistant", text: "", partial: true };
+  const entry: Entry = { role: "assistant", text: "" };
   s.transcript.push(entry);
   s.phase = "sending";
   s.turnStart = Date.now();
   s.deltas = 0;
   s.lastError = null;
-  if (s.brain?.kind === "raw") s.raw.push({ role: "user", content: text });
+  if (s.brain?.kind === "raw") {
+    s.raw.push({ role: "user", content: text });
+    trimRaw(s);
+  }
   return entry;
+}
+
+// mirror the terminal's HISTORY_MAX_CHARS: drop the oldest exchanges
+// before the history outgrows the model's context
+const RAW_MAX_CHARS = 20000;
+function trimRaw(s: AppState): void {
+  let total = s.raw.reduce((n, m) => n + m.content.length, 0);
+  while (total > RAW_MAX_CHARS && s.raw.length > 2) {
+    const drop = s.raw.splice(0, 2);
+    total -= drop.reduce((n, m) => n + m.content.length, 0);
+  }
 }
 
 export function onQueued(s: AppState): void {
@@ -86,7 +100,10 @@ export function onDone(
   entry.partial = false;
   s.phase = "done";
   if (s.brain?.kind === "forge" && e.thread) s.thread = e.thread;
-  if (s.brain?.kind === "raw") s.raw.push({ role: "assistant", content: entry.text });
+  if (s.brain?.kind === "raw") {
+    s.raw.push({ role: "assistant", content: entry.text });
+    trimRaw(s);
+  }
   s.lastStats = {
     ms: e.ms ?? Date.now() - s.turnStart,
     model: e.model ?? modelName(s.brain),
@@ -99,8 +116,10 @@ export function onDone(
 export function onStopped(s: AppState, entry: Entry): void {
   entry.partial = true;
   s.phase = "stopped";
-  if (s.brain?.kind === "raw" && entry.text)
-    s.raw.push({ role: "assistant", content: entry.text });
+  if (s.brain?.kind === "raw") {
+    if (entry.text) s.raw.push({ role: "assistant", content: entry.text });
+    else dropDanglingUser(s); // nothing streamed: don't resend the user turn twice
+  }
 }
 
 export function onError(s: AppState, entry: Entry, hint: string): void {
@@ -109,8 +128,18 @@ export function onError(s: AppState, entry: Entry, hint: string): void {
   if (!entry.text) {
     entry.text = hint;
     entry.error = true;
-    entry.partial = false;
-  } // a half-streamed answer keeps its partial text; the hint goes to the status line
+    if (s.brain?.kind === "raw") dropDanglingUser(s);
+  } else {
+    // a half-streamed answer keeps its partial text; the hint goes to the
+    // status line -- and the raw history stays alternating
+    entry.partial = true;
+    if (s.brain?.kind === "raw") s.raw.push({ role: "assistant", content: entry.text });
+  }
+}
+
+/** a failed turn leaves its user message dangling in the raw history */
+function dropDanglingUser(s: AppState): void {
+  if (s.raw.length && s.raw[s.raw.length - 1].role === "user") s.raw.pop();
 }
 
 /** /new: a fresh thread, an empty transcript */

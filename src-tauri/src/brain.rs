@@ -244,7 +244,7 @@ pub async fn check_token(
     let token = store::read_token(&app)?;
     let host = http::host_of(&url);
     let info = resolve(&app, &state, false).await?;
-    let path = if info.kind == "forge" { "/api/me" } else { "/health" };
+    let path = if info.kind == "forge" { "/api/me" } else { "/v1/models" }; // /health is tokenless on a raw server
     let resp = http::request(&state.client, Method::GET, &format!("{url}{path}"), token.as_deref(), None, false, GENERAL_TIMEOUT).await?;
     match resp.status().as_u16() {
         200 => {
