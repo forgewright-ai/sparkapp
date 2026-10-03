@@ -1,5 +1,8 @@
 # sparkapp
 
+Retired on 2026-10-03, and no longer maintained. Use spark's page in a
+browser instead: `spark serve --login` prints its address.
+
 <img src="https://raw.githubusercontent.com/forgewright-ai/spark/main/assets/banner.svg" width="400" alt="spark">
 
 The desktop door to a [spark](https://github.com/forgewright-ai/spark)
